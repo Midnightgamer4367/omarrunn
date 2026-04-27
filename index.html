@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Omar Run</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #050505;
+            color: #fff;
+            font-family: 'Courier New', Courier, monospace;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            overflow: hidden;
+        }
+        canvas {
+            border: 4px solid #1a1a1a;
+            box-shadow: 0 0 50px rgba(0,0,0,0.9);
+            background-color: #0c1445;
+        }
+        .ui-overlay {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            background: rgba(0, 0, 0, 0.95);
+            padding: 30px;
+            border: 2px solid #e74c3c;
+            display: none;
+            z-index: 10;
+            min-width: 300px;
+        }
+        .instructions {
+            margin-bottom: 10px;
+            color: #aaa;
+        }
+        #speedBarContainer {
+            position: absolute;
+            top: 20px;
+            width: 200px;
+            height: 10px;
+            background: #222;
+            border: 1px solid #fff;
+            display: none;
+        }
+        #speedBar {
+            width: 100%;
+            height: 100%;
+            background: #f1c40f;
+        }
+        #scoreHud {
+            position: absolute;
+            top: 20px;
+            right: 40px;
+            font-size: 1.5rem;
+            font-weight: bold;
+            color: #fff;
+            text-shadow: 2px 2px 4px #000;
+            display: none;
+            z-index: 5;
+        }
+        #leaderboardList {
+            list-style-type: none;
+            padding: 0;
+            margin: 15px auto;
+            max-height: 150px;
+            overflow-y: auto;
+            text-align: left;
+            width: 80%;
+            border-top: 1px solid #555;
+            border-bottom: 1px solid #555;
+            padding-top: 10px;
+        }
+        #leaderboardList li {
+            padding: 5px 0;
+            display: flex;
+            justify-content: space-between;
+        }
+        input[type="text"] {
+            padding: 10px;
+            margin: 15px 0;
+            width: 80%;
+            background: #111;
+            color: #fff;
+            border: 1px solid #e74c3c;
+            font-family: inherit;
+            text-align: center;
+        }
+        button {
+            padding: 10px 20px;
+            cursor: pointer;
+            background: #e74c3c;
+            border: none;
+            color: white;
+            font-weight: bold;
+            font-family: inherit;
+            transition: 0.2s;
+        }
+        button:hover {
+            background: #c0392b;
+        }
+        .admin-btn {
+            background: #333;
+            margin-top: 15px;
+            font-size: 0.7rem;
+            padding: 5px 10px;
+        }
+        .admin-btn:hover {
+            background: #444;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="instructions">
+        WASD | Boosts are <strong>Ultra Rare</strong> | Watch out for <strong>SPIKES!</strong>
+    </div>
+    
+    <div id="speedBarContainer"><div id="speedBar"></div></div>
+    <div id="scoreHud">Distance: <span id="currentScore">0</span>m</div>
+
+    <div id="startScreen" class="ui-overlay" style="display: block;">
+        <h1 style="color: #3498db; margin-top: 0;">Omar Run</h1>
+        <p style="font-size: 0.8rem; color: #f1c40f;">Difficulty scales slowly with distance.</p>
+        <button onclick="startGame()">START ESCAPE</button>
+        
+        <h2 style="margin-top: 25px; font-size: 1.2rem; color: #aaa;">TOP SURVIVORS</h2>
+        <ul id="leaderboardList"></ul>
+        
+        <button class="admin-btn" onclick="resetLeaderboard()">RESET LEADERBOARD</button>
+    </div>
+
+    <div id="gameOverScreen" class="ui-overlay">
+        <h1 id="deathReason" style="color: #e74c3c; font-size: 2.5rem; margin-top: 0;">CAUGHT</h1>
+        <p>You escaped for <span id="scoreVal">0</span> meters.</p>
+        <input type="text" id="playerName" placeholder="Enter your name" maxlength="12" autocomplete="off">
+        <br>
+        <button onclick="submitScore()">SUBMIT SCORE</button>
+    </div>
+
+    <canvas id="gameCanvas" width="800" height="450"></canvas>
+
+    <script>
+        // --- DREAMLO SETTINGS ---
+        // Get these from dreamlo.com
+        const PUBLIC_KEY = "69efb1208f40bb1068908c3b";
+        const PRIVATE_KEY = "ZmsAatwPx06GgTNXrsZ9Zw5CVRu41onkmKgvHvHpW16A";
+
+        const canvas = document.getElementById("gameCanvas");
+        const ctx = canvas.getContext("2d");
+
+        const bgImg = new Image();
+        bgImg.src = 'image_a4fa3e.png';
+        const omarImg = new Image();
+        omarImg.src = 'omar.jpeg';
+
+        let gameState = "START"; 
+        let cameraX = 0;
+        let boxes = [];
+        let boosts = [];
+        let spikes = [];
+        let nextSpawnX = 1000;
+        const groundHeight = 40;
+
+        const player = {
+            startX: 600, x: 600, y: 200, width: 30, height: 30,
+            color: "#3498db", dx: 0, dy: 0,
+            baseSpeed: 1.5, boostedSpeed: 3.5, currentAccel: 1.5,
+            jumpPower: -17, grounded: false, boostTimer: 0
+        };
+
+        const enemy = {
+            startX: 100, x: 100, y: 200, width: 130, height: 130,
+            baseSpeed: 6.5, currentSpeed: 6.5, isStuck: false, stuckTimer: 0
+        };
+
+        const gravity = 0.75;
+        const friction = 0.85;
+        const keys = { ArrowUp: false, ArrowLeft: false, ArrowRight: false, KeyW: false, KeyA: false, KeyD: false, Space: false };
+
+        window.addEventListener("keydown", (e) => { if (keys.hasOwnProperty(e.code)) keys[e.code] = true; });
+        window.addEventListener("keyup", (e) => { if (keys.hasOwnProperty(e.code)) keys[e.code] = false; });
+
+        function isColliding(r1, r2) {
+            return r1.x < r2.x + r2.width && r1.x + r1.width > r2.x &&
+                   r1.y < r2.y + r2.height && r1.y + r1.height > r2.y;
+        }
+
+        // --- GLOBAL LEADERBOARD LOGIC (DREAMLO) ---
+        async function renderLeaderboard() {
+            let ul = document.getElementById("leaderboardList");
+            ul.innerHTML = "<li style='justify-content:center; color:#777;'>Connecting to global servers...</li>";
+
+            try {
+                const response = await fetch(`https://www.dreamlo.com/lb/${PUBLIC_KEY}/json`);
+                const data = await response.json();
+                ul.innerHTML = "";
+
+                let scores = data.dreamlo.leaderboard.entry;
+                if (!scores) {
+                    ul.innerHTML = "<li style='justify-content:center; color:#777;'>No legends yet.</li>";
+                    return;
+                }
+
+                // Standardize to array (Dreamlo returns an object if there is only 1 entry)
+                if (!Array.isArray(scores)) scores = [scores];
+
+                scores.forEach((entry, index) => {
+                    ul.innerHTML += `<li><span>${index + 1}. ${entry.name}</span> <span>${entry.score}m</span></li>`;
+                });
+            } catch (e) {
+                ul.innerHTML = "<li style='justify-content:center; color:#e74c3c;'>Leaderboard Offline</li>";
+            }
+        }
+
+        async function saveScore(name, score) {
+            if (!name || name.trim() === "") name = "Anonymous";
+            // Remove spaces/special chars for the API URL
+            const cleanName = name.replace(/[^a-zA-Z0-9]/g, "");
+            
+            try {
+                await fetch(`https://www.dreamlo.com/lb/${PRIVATE_KEY}/add/${cleanName}/${score}`);
+            } catch (e) {
+                console.error("Failed to upload score.");
+            }
+        }
+
+        async function resetLeaderboard() {
+            const password = prompt("Enter Admin Password to clear GLOBAL scores:");
+            if (password === 'midnightsgames') {
+                if(confirm("This will delete the global leaderboard for EVERYONE. Are you sure?")) {
+                    await fetch(`https://www.dreamlo.com/lb/${PRIVATE_KEY}/clear`);
+                    renderLeaderboard();
+                }
+            } else if (password !== null) {
+                alert("Incorrect password.");
+            }
+        }
+
+        function showStartMenu() {
+            gameState = "START";
+            document.getElementById("startScreen").style.display = "block";
+            document.getElementById("gameOverScreen").style.display = "none";
+            document.getElementById("scoreHud").style.display = "none";
+            document.getElementById("speedBarContainer").style.display = "none";
+            renderLeaderboard();
+        }
+
+        function startGame() {
+            player.x = player.startX; player.y = 200; player.dx = 0; player.dy = 0; player.boostTimer = 0;
+            enemy.x = enemy.startX; enemy.y = 200; enemy.isStuck = false; enemy.stuckTimer = 0;
+            enemy.currentSpeed = enemy.baseSpeed;
+            boxes = []; boosts = []; spikes = []; nextSpawnX = 1000; cameraX = 0;
+
+            document.getElementById("startScreen").style.display = "none";
+            document.getElementById("scoreHud").style.display = "block";
+            document.getElementById("playerName").value = ""; 
+            gameState = "PLAYING";
+        }
+
+        async function submitScore() {
+            let name = document.getElementById("playerName").value;
+            let score = parseInt(document.getElementById("scoreVal").innerText);
+            await saveScore(name, score);
+            showStartMenu();
+        }
+
+        // --- ALL OTHER GAME ENGINE CODE BELOW REMAINS THE SAME ---
+
+        function spawnWorldObjects(x) {
+            const type = Math.random();
+            if (type < 0.4) { 
+                const stackHeight = Math.floor(Math.random() * 3) + 1;
+                for(let i = 0; i < stackHeight; i++) {
+                    boxes.push({ x: x, y: canvas.height - groundHeight - 40 - (i * 40), width: 40, height: 40 });
+                }
+            } else if (type < 0.7) { 
+                const spikeCount = Math.floor(Math.random() * 3) + 1;
+                for(let i = 0; i < spikeCount; i++) {
+                    spikes.push({ x: x + (i * 35), y: canvas.height - groundHeight - 30, width: 30, height: 30 });
+                }
+            } else { 
+                boxes.push({ x: x, y: canvas.height - groundHeight - 40, width: 40, height: 40 });
+                spikes.push({ x: x + 45, y: canvas.height - groundHeight - 30, width: 30, height: 30 });
+                boxes.push({ x: x + 80, y: canvas.height - groundHeight - 80, width: 40, height: 40 });
+            }
+
+            if (Math.random() > 0.96) {
+                boosts.push({ x: x + 20, y: canvas.height - groundHeight - 160 - (Math.random() * 100), width: 20, height: 20, collected: false });
+            }
+        }
+
+        function triggerGameOver(reason) {
+            gameState = "GAMEOVER";
+            document.getElementById("deathReason").innerText = reason;
+            document.getElementById("gameOverScreen").style.display = "block";
+            document.getElementById("scoreHud").style.display = "none";
+            document.getElementById("speedBarContainer").style.display = "none";
+            document.getElementById("scoreVal").innerText = Math.max(0, Math.floor(player.x - player.startX));
+        }
+
+        function update() {
+            if (gameState !== "PLAYING") return;
+
+            let currentDist = Math.max(0, Math.floor(player.x - player.startX));
+            document.getElementById("currentScore").innerText = currentDist;
+
+            enemy.currentSpeed = enemy.baseSpeed + (currentDist / 1000) * 0.2;
+
+            if (player.x + 800 > nextSpawnX) {
+                spawnWorldObjects(nextSpawnX);
+                nextSpawnX += Math.random() * 300 + 250;
+            }
+
+            const isBoostActive = player.boostTimer > 0;
+            if (isBoostActive) {
+                player.boostTimer--;
+                player.currentAccel = player.boostedSpeed;
+                document.getElementById("speedBarContainer").style.display = "block";
+                document.getElementById("speedBar").style.width = (player.boostTimer / 180) * 100 + "%";
+            } else {
+                player.currentAccel = player.baseSpeed;
+                document.getElementById("speedBarContainer").style.display = "none";
+            }
+
+            // Player Physics
+            if (keys.ArrowLeft || keys.KeyA) player.dx -= player.currentAccel;
+            if (keys.ArrowRight || keys.KeyD) player.dx += player.currentAccel;
+            if ((keys.ArrowUp || keys.KeyW || keys.Space) && player.grounded) {
+                player.dy = player.jumpPower; player.grounded = false;
+            }
+
+            player.dy += gravity; player.dx *= friction; player.x += player.dx;
+
+            boxes.forEach(box => {
+                if (isColliding(player, box)) {
+                    if (player.dx > 0) player.x = box.x - player.width;
+                    else if (player.dx < 0) player.x = box.x + box.width;
+                    player.dx = 0;
+                }
+            });
+
+            player.y += player.dy; player.grounded = false;
+
+            boxes.forEach(box => {
+                if (isColliding(player, box)) {
+                    if (player.dy > 0) { player.y = box.y - player.height; player.grounded = true; }
+                    else if (player.dy < 0) { player.y = box.y + box.height; }
+                    player.dy = 0;
+                }
+            });
+
+            if (player.y + player.height > canvas.height - groundHeight) {
+                player.y = canvas.height - groundHeight - player.height;
+                player.dy = 0; player.grounded = true;
+            }
+
+            for (let spike of spikes) {
+                if (isColliding(player, spike)) {
+                    triggerGameOver("IMPALED");
+                    return;
+                }
+            }
+
+            boosts.forEach(boost => {
+                if (!boost.collected && isColliding(player, boost)) {
+                    boost.collected = true; player.boostTimer = 180;
+                }
+            });
+
+            // Omar Logic
+            if (isBoostActive) {
+                enemy.isStuck = false;
+                const dx = player.x - enemy.x; const dy = player.y - enemy.y;
+                const dist = Math.sqrt(dx*dx + dy*dy);
+                enemy.x += (dx/dist) * enemy.currentSpeed; enemy.y += (dy/dist) * enemy.currentSpeed;
+                for (let i = boxes.length - 1; i >= 0; i--) {
+                    if (isColliding(enemy, boxes[i])) boxes.splice(i, 1);
+                }
+            } else if (enemy.isStuck) {
+                enemy.stuckTimer--;
+                if (enemy.stuckTimer <= 0) {
+                    enemy.isStuck = false;
+                    for (let i = boxes.length - 1; i >= 0; i--) {
+                        if (isColliding(enemy, boxes[i])) boxes.splice(i, 1);
+                    }
+                }
+            } else {
+                const dx = player.x - enemy.x; const dy = player.y - enemy.y;
+                const dist = Math.sqrt(dx*dx + dy*dy);
+                enemy.x += (dx/dist) * enemy.currentSpeed; enemy.y += (dy/dist) * enemy.currentSpeed;
+                for (let box of boxes) {
+                    if (isColliding(enemy, box)) {
+                        enemy.isStuck = true; enemy.stuckTimer = 25; break;
+                    }
+                }
+            }
+
+            if (enemy.x < cameraX) {
+                enemy.x = cameraX;
+                enemy.isStuck = false;
+                for (let i = boxes.length - 1; i >= 0; i--) {
+                    if (isColliding(enemy, boxes[i])) boxes.splice(i, 1);
+                }
+            }
+
+            if (isColliding(player, enemy)) {
+                triggerGameOver("CAUGHT");
+            }
+
+            cameraX = player.x - canvas.width / 2;
+        }
+
+        function drawMountains(offset, heightMult, color) {
+            ctx.fillStyle = color;
+            ctx.beginPath();
+            ctx.moveTo(0, canvas.height);
+            for (let i = 0; i <= canvas.width; i += 50) {
+                let yPos = canvas.height - groundHeight - (Math.sin((i + offset) * 0.01) * 50 + heightMult);
+                ctx.lineTo(i, yPos);
+            }
+            ctx.lineTo(canvas.width, canvas.height);
+            ctx.fill();
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = "#0c1445";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            drawMountains(cameraX * 0.2, 100, "#1a1a2e");
+            drawMountains(cameraX * 0.4, 60, "#16213e");
+
+            if (bgImg.complete && bgImg.naturalHeight > 0) {
+                let bgScale = canvas.height / bgImg.naturalHeight;
+                let bgWidth = bgImg.naturalWidth * bgScale;
+                let pX = -(cameraX * 0.6) % bgWidth;
+                ctx.globalAlpha = 0.4;
+                ctx.drawImage(bgImg, pX, 0, bgWidth, canvas.height);
+                ctx.drawImage(bgImg, pX + bgWidth, 0, bgWidth, canvas.height);
+                ctx.globalAlpha = 1.0;
+            }
+
+            ctx.save();
+            ctx.translate(-cameraX, 0);
+
+            ctx.fillStyle = "#e74c3c";
+            spikes.forEach(s => {
+                ctx.beginPath();
+                ctx.moveTo(s.x, s.y + s.height);
+                ctx.lineTo(s.x + s.width / 2, s.y);
+                ctx.lineTo(s.x + s.width, s.y + s.height);
+                ctx.fill();
+            });
+
+            boosts.forEach(boost => {
+                if (!boost.collected) {
+                    ctx.fillStyle = "#f1c40f";
+                    ctx.shadowBlur = 15;
+                    ctx.shadowColor = "#f1c40f";
+                    ctx.beginPath();
+                    ctx.arc(boost.x + 10, boost.y + 10, 10, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.shadowBlur = 0;
+                }
+            });
+
+            boxes.forEach(box => {
+                ctx.fillStyle = "#8b5a2b";
+                ctx.fillRect(box.x, box.y, box.width, box.height);
+                ctx.lineWidth = 3;
+                ctx.strokeStyle = "#4a3219";
+                ctx.strokeRect(box.x, box.y, box.width, box.height);
+            });
+
+            ctx.fillStyle = player.color;
+            if (player.boostTimer > 0) {
+                ctx.shadowBlur = 20;
+                ctx.shadowColor = "#f1c40f";
+                ctx.fillStyle = "#f1c40f";
+            }
+            ctx.fillRect(player.x, player.y, player.width, player.height);
+            ctx.shadowBlur = 0;
+
+            if (omarImg.complete && omarImg.naturalWidth > 0) {
+                let shakeX = (enemy.isStuck || (player.boostTimer > 0 && boxes.some(b => isColliding(enemy, b)))) ? (Math.random() - 0.5) * 6 : 0;
+                ctx.drawImage(omarImg, enemy.x + shakeX, enemy.y, enemy.width, enemy.height);
+            } else {
+                ctx.fillStyle = "#e74c3c";
+                ctx.fillRect(enemy.x, enemy.y, enemy.width, enemy.height);
+                ctx.fillStyle = "#fff";
+                ctx.font = "bold 20px 'Courier New'";
+                ctx.fillText("OMAR", enemy.x + 40, enemy.y + 70);
+            }
+
+            ctx.restore();
+
+            ctx.fillStyle = "#000";
+            ctx.fillRect(0, canvas.height - groundHeight, canvas.width, groundHeight);
+        }
+
+        function loop() {
+            update();
+            draw();
+            requestAnimationFrame(loop);
+        }
+
+        showStartMenu();
+        loop();
+    </script>
+</body>
+</html>
